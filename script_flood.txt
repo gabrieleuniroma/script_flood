@@ -15,7 +15,7 @@ var segmentation = ee.FeatureCollection("users/esposito1976938/spatial_join"),
           [11.616769206524156, 44.65158171960682]]]),
     CHIRPS = ee.ImageCollection("UCSB-CHG/CHIRPS/PENTAD");
 
-var selectedFeatures = segmentation.filter(ee.Filter.eq('DN', 163204));
+var selectedFeatures = segmentation.filter(ee.Filter.eq('DN', 90959));
 
 print('selectedFeatures (campi da considerare)', selectedFeatures)
 print('selectedFeatures size', selectedFeatures.size())
@@ -142,7 +142,7 @@ var fittedHarmonic = harmonicLandsat.map(function(image) {
 print(ui.Chart.image.series(
     fittedHarmonic.select(['fitted_RVI', 'RVI']), part1, ee.Reducer.median(), 10, 'system:time_start')
     .setOptions({
-      title: 'Ascending RVI orbit'+numero_orbita+ ' - vigneti in flood area',
+      title: 'Ascending RVI orbit'+numero_orbita+ ' - colture autunno vernine in flood area',
       lineWidth: 1,
       pointSize: 3,
       curveType: 'function'
@@ -230,15 +230,15 @@ var funzione_di_aggregazione_S2 = function(d1) {
   // e questo crea problemi al reducer
   var S2_sub_period =s2CloudMasked_collection_with_NDVI.filterDate(date_range);
     var number_of_images_aggregated = S2_sub_period.size();
-    // con set imposto 4 nuove popriet‡
-    // la prima Ë start_date che conterr‡ la 
+    // con set imposto 4 nuove popriet√†
+    // la prima √® start_date che conterr√† la 
     // data di start di ciascun sotto periodo
     // per ogni immagine aggregata
-    // la seconda Ë end_date che conterr‡ la
+    // la seconda √® end_date che conterr√† la
     // data di end di ciascun sotto periodo
     // per ogni immagine aggregata
-    // la terza Ë n_images
-    // che conterr‡ il numero di immagini che sono 
+    // la terza √® n_images
+    // che conterr√† il numero di immagini che sono 
     // state aggregate nel sotto-periodo considerato
       return(S2_sub_period.max().set('start_date', start).set('end_date', end).set('system:time_start', data_centrale.millis()).set('n_images', number_of_images_aggregated).clip(geometry).copyProperties(S2_sub_period, ['system:index'])); //.clip(geometry
  };
@@ -290,7 +290,7 @@ print(ui.Chart.image.series(
   //fittedHarmonic.select(['fitted', 'NDVI']), roi, ee.Reducer.mean(), 30)
    fittedHarmonic_Sentinel_2.select(['fitted_NDVI', 'NDVI']), part1, ee.Reducer.median(), 10, 'system:time_start')
     .setOptions({
-      title: 'NDVI - vigneti in flood area',
+      title: 'NDVI - colture autunno vernine in flood area',
       lineWidth: 1,
       pointSize: 3
     })
@@ -314,7 +314,7 @@ var chart_RVI_NDVI =
         
         })
         .setOptions({
-          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI vigneti in flood area',
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI colture autunno vernine in flood area',
           hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
           vAxis: {
             title: 'RVI-NDVI',
@@ -330,12 +330,12 @@ Map.addLayer(flood, {}, 'flood')
 Map.addLayer(classi, {}, 'classi')
 Map.addLayer(segmentation, {}, 'segmentation')
 Map.addLayer(selectedFeatures, {}, 'selectedFeatures')
-var selectedFeatures_1 = segmentation.filter(ee.Filter.eq('DN', 128623));
+var selectedFeatures_1 = segmentation.filter(ee.Filter.eq('DN', 62421));
 var part2 = selectedFeatures_1
 print(ui.Chart.image.series(
     fittedHarmonic.select(['fitted_RVI', 'RVI']), part2, ee.Reducer.median(), 10, 'system:time_start')
     .setOptions({
-      title: 'Ascending RVI orbit'+numero_orbita+ ' - vigneti',
+      title: 'Ascending RVI orbit'+numero_orbita+ ' - colture autunno vernine',
       lineWidth: 1,
       pointSize: 3,
       curveType: 'function'
@@ -345,7 +345,7 @@ print(ui.Chart.image.series(
   //fittedHarmonic.select(['fitted', 'NDVI']), roi, ee.Reducer.mean(), 30)
    fittedHarmonic_Sentinel_2.select(['fitted_NDVI', 'NDVI']), part2, ee.Reducer.median(), 10, 'system:time_start')
     .setOptions({
-      title: 'NDVI - vigneti',
+      title: 'NDVI - colture autunno vernine',
       lineWidth: 1,
       pointSize: 3
     })
@@ -361,7 +361,7 @@ var chart_RVI_NDVI_1 =
         
         })
         .setOptions({
-          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI colture vigneti ',
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI colture autunno vernine ',
           hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
           vAxis: {
             title: 'RVI-NDVI',
@@ -374,8 +374,6 @@ var chart_RVI_NDVI_1 =
         });
 
 print (chart_RVI_NDVI_1)
-
-Map.addLayer(selectedFeatures_1, {}, 'selectedFeatures_1')
 var filtered_CHIRPS = CHIRPS.filter(ee.Filter.date(startDate, endDate));
 print(filtered_CHIRPS)
 var CHIRPS_GSD = filtered_CHIRPS.first().projection().nominalScale()
@@ -403,7 +401,7 @@ function normalize_array (array)
 var max_y = medianList_y.reduce(ee.Reducer.max(), [0]).get([0])
 var count_y = medianList_y.reduce(ee.Reducer.count(), [0]).get([0])
 
-//x normalized = (x ñ x minimum) / (x maximum ñ x minimum)
+//x normalized = (x ‚Äì x minimum) / (x maximum ‚Äì x minimum)
 var normalized_array = medianList_y.subtract(min_y).divide(max_y.subtract(min_y))
   return normalized_array
 }
@@ -488,7 +486,7 @@ var chart_RVI_NDVI_precipitation =
         
         })
         .setOptions({
-          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI timeseries vigneti with precipitation in flood area',
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI timeseries colture autunno vernine with precipitation in flood area',
           hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
           vAxis: {
             title: 'RVI-NDVI-normalized precipitation in flood area',
@@ -513,7 +511,7 @@ var chart_RVI_NDVI_precipitation_1 =
         
         })
         .setOptions({
-          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI timeseries vigneti with precipitation',
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI timeseries colture autunno vernine with precipitation',
           hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
           vAxis: {
             title: 'RVI-NDVI-normalized precipitation',
@@ -528,7 +526,13 @@ var chart_RVI_NDVI_precipitation_1 =
           interpolateNulls: true // mettere a false per vedere la serie bucata
         });
 print (chart_RVI_NDVI_precipitation_1)
-  
+Map.addLayer(selectedFeatures_1, {}, 'selectedFeatures_1')
+ 
+ 
+    
+    
+ 
+
  
     
     
