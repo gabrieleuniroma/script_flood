@@ -1,0 +1,534 @@
+var segmentation = ee.FeatureCollection("users/esposito1976938/spatial_join"),
+    classi = ee.FeatureCollection("users/esposito1976938/iCOLT2023_vec_HAgt05_clean"),
+    flood = ee.FeatureCollection("users/esposito1976938/flood_area_emiliaromagna"),
+    s2Sr = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED"),
+    s2Clouds = ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY"),
+    geometry = 
+    /* color: #98ff00 */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[11.29679239988353, 44.47742383573328],
+          [11.61539591550853, 44.099936971230925],
+          [12.46408976316478, 44.135429419672484],
+          [12.48880900144603, 44.204381482428616],
+          [12.33225382566478, 44.57239474544317],
+          [11.616769206524156, 44.65158171960682]]]),
+    CHIRPS = ee.ImageCollection("UCSB-CHG/CHIRPS/PENTAD");
+
+var selectedFeatures = segmentation.filter(ee.Filter.eq('DN', 163204));
+
+print('selectedFeatures (campi da considerare)', selectedFeatures)
+print('selectedFeatures size', selectedFeatures.size())
+var part1 = selectedFeatures; //in this case the geometry can be drawn in the GEE window 
+print(part1);
+var startDate = '2022-08-01';
+var endDate = '2023-10-31';
+startDate = ee.Date(startDate);
+endDate = ee.Date(endDate);
+print(startDate);
+print(endDate);
+
+print('startDate:', startDate.format('yyyy-MM-dd').getInfo() + " " + endDate.format('yyyy-MM-dd').getInfo());
+var numero_orbita = 117
+var sentinel1 = ee.ImageCollection('COPERNICUS/S1_GRD')
+              .filterDate(startDate,endDate)
+              .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+              .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+              .filter(ee.Filter.eq('instrumentMode', 'IW'))
+              .filter(ee.Filter.eq('relativeOrbitNumber_start',numero_orbita)) //asc
+              //.filter(ee.Filter.eq('relativeOrbitNumber_start', 146)) //asc
+              //.filter(ee.Filter.eq('relativeOrbitNumber_start', 124)) //desc
+              .filterBounds(part1)
+              ; 
+              
+              
+print (sentinel1,'Sentinel1');
+
+
+
+
+
+// Image count function for SAR
+function calc_RVI(img) {
+	var bandsAscVV = img.select('VV');
+	var bandsAscVH = img.select('VH');
+	var RVI = (bandsAscVH.multiply(4)).divide(bandsAscVV.add(bandsAscVH)).rename('RVI')
+	.copyProperties(img).set('system:time_start', (img.get('system:time_start'))); 
+	return RVI
+}
+
+var RVI = sentinel1.map(calc_RVI);
+print (RVI, 'rvi')
+var dependent = 'RVI';
+
+// The number of cycles per year to model.
+var harmonics = 3;
+
+// Make a list of harmonic frequencies to model.  
+// These also serve as band name suffixes.
+var harmonicFrequencies = ee.List.sequence(1, harmonics);
+
+// Function to get a sequence of band names for harmonic terms.
+var getNames = function(base, list) {
+  return ee.List(list).map(function(i) { 
+    return ee.String(base).cat(ee.Number(i).int());
+  });
+};
+
+// Construct lists of names for the harmonic terms.
+var cosNames = getNames('cos_', harmonicFrequencies);
+var sinNames = getNames('sin_', harmonicFrequencies);
+
+// Independent variables.
+var independents = ee.List(['constant', 't']).cat(cosNames).cat(sinNames);
+
+
+
+// Function to add a constant band.
+var addConstant = function(image) {
+  return image.addBands(ee.Image(1));
+};
+
+// Function to add a time band.
+var addTime = function(image) {
+  // Compute time in fractional years since the epoch.
+  var date = image.date();
+  var years = date.difference(ee.Date('1970-01-01'), 'year');
+  var timeRadians = ee.Image(years.multiply(2 * Math.PI));
+  return image.addBands(timeRadians.rename('t').float());
+};
+
+var addHarmonics = function(freqs) {
+  return function(image) {
+    // Make an image of frequencies.
+    var frequencies = ee.Image.constant(freqs);
+    // This band should represent time in radians.
+    var time = ee.Image(image).select('t');
+    // Get the cosine terms.
+    var cosines = time.multiply(frequencies).cos().rename(cosNames);
+    // Get the sin terms.
+    var sines = time.multiply(frequencies).sin().rename(sinNames);
+    return image.addBands(cosines).addBands(sines);
+  };
+};
+
+
+
+var harmonicLandsat = RVI
+  .map(addConstant)
+  .map(addTime)
+  .map(addHarmonics(harmonicFrequencies));  
+print ('harmoniclandasat', harmonicLandsat)
+// The output of the regression reduction is a 4x1 array image.
+var harmonicTrend = harmonicLandsat
+  .select(independents.add(dependent))
+  .reduce(ee.Reducer.linearRegression(independents.length(), 1));
+
+
+var harmonicTrendCoefficients = harmonicTrend.select('coefficients')
+  .arrayProject([0])
+  .arrayFlatten([independents]);
+
+
+var fittedHarmonic = harmonicLandsat.map(function(image) {
+  return image.addBands(
+    image.select(independents)
+      .multiply(harmonicTrendCoefficients)
+      .reduce('sum')
+      .rename('fitted_RVI'));
+});
+
+
+print(ui.Chart.image.series(
+    fittedHarmonic.select(['fitted_RVI', 'RVI']), part1, ee.Reducer.median(), 10, 'system:time_start')
+    .setOptions({
+      title: 'Ascending RVI orbit'+numero_orbita+ ' - vigneti in flood area',
+      lineWidth: 1,
+      pointSize: 3,
+      curveType: 'function'
+    })
+);
+var period = 'days';
+var perido_lenght = 10;
+
+// Create list of dates for time series
+var n_periods = endDate.difference(startDate,period).round();
+var dates_indexes = ee.List.sequence(0,ee.Number(n_periods).subtract(1),perido_lenght);
+print('numero_di_periods (days se usiamo days)',n_periods);
+print('dates_indexes', dates_indexes);
+
+var make_datelist = function(n) {
+  return startDate.advance(n,period);
+};
+var dates = dates_indexes.map(make_datelist);
+print('Start dates for the aggregation iteration', dates);
+var MAX_CLOUD_PROBABILITY = 50;
+
+ 
+
+function maskClouds(img) {
+  var clouds = ee.Image(img.get('cloud_mask')).select('probability');
+  var isNotCloud = clouds.lt(MAX_CLOUD_PROBABILITY);
+  return img.updateMask(isNotCloud).copyProperties(img, ['system:time_start','system:index']);
+}
+
+// The masks for the 10m bands sometimes do not exclude bad data at
+// scene edges, so we apply masks from the 20m and 60m bands as well.
+// Example asset that needs this operation:
+// COPERNICUS/S2_CLOUD_PROBABILITY/20190301T000239_20190301T000238_T55GDP
+function maskEdges(s2_img) {
+  return s2_img.updateMask(
+      s2_img.select('B8A').mask().updateMask(s2_img.select('B9').mask())).copyProperties(s2_img, ['system:time_start','system:index']);
+}
+//SPACECRAFT_NAME: Sentinel-2B
+// Filter input collections by desired data range and region.
+// .filter(ee.Filter.eq('SPACECRAFT_NAME', 'Sentinel-2B'))
+//.filter(ee.Filter.eq('MGRS_TILE', '32TQQ'))
+var criteria = ee.Filter.and(
+    ee.Filter.bounds(geometry), ee.Filter.date(startDate, endDate));
+s2Sr = s2Sr.filter(criteria).map(maskEdges);
+s2Clouds = s2Clouds.filter(criteria);
+print(s2Clouds)
+
+// Join S2 SR with cloud probability dataset to add cloud mask.
+var s2SrWithCloudMask = ee.Join.saveFirst('cloud_mask').apply({
+  primary: s2Sr,
+  secondary: s2Clouds,
+  condition:
+      ee.Filter.equals({leftField: 'system:index', rightField: 'system:index'})
+});
+
+var s2CloudMasked_collection =
+    ee.ImageCollection(s2SrWithCloudMask).map(maskClouds);
+    
+print(s2CloudMasked_collection);
+//Map.addLayer(s2CloudMasked_collection);
+
+function apply_radiometric_scaling_factor(image)
+{
+  return image.multiply(0.0001).copyProperties(image, ['system:time_start','system:index']);
+}
+
+var filtered_and_radiometrically_scaled_S2 = s2CloudMasked_collection.map(apply_radiometric_scaling_factor);
+print('filtered_and_radiometrically_scaled_S2 size', filtered_and_radiometrically_scaled_S2.size());
+function add_NDVI(img)
+  {
+    var ndvi = img.normalizedDifference(['B8', 'B4']).rename('NDVI');
+    img = img.addBands(ndvi);
+    return img.copyProperties(img, ['system:time_start','system:index']);
+ }
+var s2CloudMasked_collection_with_NDVI =  filtered_and_radiometrically_scaled_S2.map(add_NDVI)
+var funzione_di_aggregazione_S2 = function(d1) {
+  var start = ee.Date(d1);
+  var end = ee.Date(d1).advance(perido_lenght,period);
+  var delta_giorni = ee.Number(end.difference(start, 'days'));
+  var meta_delta_giorni = delta_giorni.divide(2);
+  var data_centrale = start.advance(meta_delta_giorni, 'days');
+  var date_range = ee.DateRange(start,end);
+  // dobbiamo usare la versione harmonized, altrimenti
+  // ci sono alcune immagini con 23 bande e altre con 21
+  // e questo crea problemi al reducer
+  var S2_sub_period =s2CloudMasked_collection_with_NDVI.filterDate(date_range);
+    var number_of_images_aggregated = S2_sub_period.size();
+    // con set imposto 4 nuove poprietà
+    // la prima è start_date che conterrà la 
+    // data di start di ciascun sotto periodo
+    // per ogni immagine aggregata
+    // la seconda è end_date che conterrà la
+    // data di end di ciascun sotto periodo
+    // per ogni immagine aggregata
+    // la terza è n_images
+    // che conterrà il numero di immagini che sono 
+    // state aggregate nel sotto-periodo considerato
+      return(S2_sub_period.max().set('start_date', start).set('end_date', end).set('system:time_start', data_centrale.millis()).set('n_images', number_of_images_aggregated).clip(geometry).copyProperties(S2_sub_period, ['system:index'])); //.clip(geometry
+ };
+ 
+var list_of_images_S2_aggregated = dates.map(funzione_di_aggregazione_S2);
+print('list_of_images_S2_aggregated', list_of_images_S2_aggregated);
+// Attenzione che l'aggregazione fa perdere la scala!!!!!
+var S2_filtered_aggregated = ee.ImageCollection(list_of_images_S2_aggregated);
+print('S2_filtered_aggregated', S2_filtered_aggregated);
+
+Map.centerObject(geometry, 10);
+ 
+// Filtro la collezione aggregata per escludere i sub-periodi per cui non ho le immagini
+S2_filtered_aggregated = S2_filtered_aggregated.filter(ee.Filter.gt('n_images',0));
+print('S2_filtered_aggregated post rimozione', S2_filtered_aggregated);
+var count = S2_filtered_aggregated.size();
+// casting the image collection in a list of ee.Images
+var S2_L2A_imagesList = S2_filtered_aggregated.toList(count);
+// The dependent variable we are modeling.
+var dependent_1 = 'NDVI';
+
+
+var harmonic_Sentinel_2 = S2_filtered_aggregated
+  .map(addConstant)
+  .map(addTime)
+  .map(addHarmonics(harmonicFrequencies));  
+print ('harmonicsentinel2', harmonic_Sentinel_2);
+// The output of the regression reduction is a 4x1 array image.
+var harmonicTrend_Sentinel_2 = harmonic_Sentinel_2
+  .select(independents.add(dependent_1))
+  .reduce(ee.Reducer.linearRegression(independents.length(), 1));
+
+// Turn the array image into a multi-band image of coefficients.
+var harmonicTrendCoefficients_Sentinel_2 = harmonicTrend_Sentinel_2.select('coefficients')
+  .arrayProject([0])
+  .arrayFlatten([independents]);
+
+// Compute fitted values.
+var fittedHarmonic_Sentinel_2 = harmonic_Sentinel_2.map(function(image) {
+  return image.addBands(
+    image.select(independents)
+      .multiply(harmonicTrendCoefficients_Sentinel_2)
+      .reduce('sum')
+      .rename('fitted_NDVI'));
+});
+
+// Plot the fitted model and the original data at the ROI.
+print(ui.Chart.image.series(
+  //fittedHarmonic.select(['fitted', 'NDVI']), roi, ee.Reducer.mean(), 30)
+   fittedHarmonic_Sentinel_2.select(['fitted_NDVI', 'NDVI']), part1, ee.Reducer.median(), 10, 'system:time_start')
+    .setOptions({
+      title: 'NDVI - vigneti in flood area',
+      lineWidth: 1,
+      pointSize: 3
+    })
+);
+
+// Display the ROI and NDVI composite on the map.
+Map.centerObject(geometry, 11);
+//Map.addLayer(harmonicLandsat,
+ // {bands: 'NDVI', min: 0.1, max: 0.9, palette: ['white', 'green']},
+ // 'NDVI Mosaic');
+//Map.addLayer(roi, {color: 'yellow'}, 'ROI');
+var IC_ALL = fittedHarmonic.select('RVI', 'fitted_RVI').merge(fittedHarmonic_Sentinel_2.select('NDVI', 'fitted_NDVI'));
+print ('ic_all', IC_ALL)
+var chart_RVI_NDVI =
+    ui.Chart.image.series({
+          imageCollection: IC_ALL,
+          region: part1,
+          reducer: ee.Reducer.median(),
+          scale: 10,
+          xProperty: 'system:time_start', 
+        
+        })
+        .setOptions({
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI vigneti in flood area',
+          hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
+          vAxis: {
+            title: 'RVI-NDVI',
+            titleTextStyle: {italic: false, bold: true}
+          },
+          lineWidth: 3,
+          colors: ['1d6b99', '1d6b99','red' ,'red'],
+          curveType: ['function', 'function'],
+          interpolateNulls: true // mettere a false per vedere la serie bucata
+        });
+print (chart_RVI_NDVI);
+Map.addLayer(flood, {}, 'flood')
+Map.addLayer(classi, {}, 'classi')
+Map.addLayer(segmentation, {}, 'segmentation')
+Map.addLayer(selectedFeatures, {}, 'selectedFeatures')
+var selectedFeatures_1 = segmentation.filter(ee.Filter.eq('DN', 128623));
+var part2 = selectedFeatures_1
+print(ui.Chart.image.series(
+    fittedHarmonic.select(['fitted_RVI', 'RVI']), part2, ee.Reducer.median(), 10, 'system:time_start')
+    .setOptions({
+      title: 'Ascending RVI orbit'+numero_orbita+ ' - vigneti',
+      lineWidth: 1,
+      pointSize: 3,
+      curveType: 'function'
+    })
+);
+print(ui.Chart.image.series(
+  //fittedHarmonic.select(['fitted', 'NDVI']), roi, ee.Reducer.mean(), 30)
+   fittedHarmonic_Sentinel_2.select(['fitted_NDVI', 'NDVI']), part2, ee.Reducer.median(), 10, 'system:time_start')
+    .setOptions({
+      title: 'NDVI - vigneti',
+      lineWidth: 1,
+      pointSize: 3
+    })
+);
+
+var chart_RVI_NDVI_1 =
+    ui.Chart.image.series({
+          imageCollection: IC_ALL,
+          region: part2,
+          reducer: ee.Reducer.median(),
+          scale: 10,
+          xProperty: 'system:time_start', 
+        
+        })
+        .setOptions({
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI colture vigneti ',
+          hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
+          vAxis: {
+            title: 'RVI-NDVI',
+            titleTextStyle: {italic: false, bold: true}
+          },
+          lineWidth: 3,
+          colors: ['1d6b99', '1d6b99','red' ,'red'],
+          curveType: ['function', 'function'],
+          interpolateNulls: true // mettere a false per vedere la serie bucata
+        });
+
+print (chart_RVI_NDVI_1)
+
+Map.addLayer(selectedFeatures_1, {}, 'selectedFeatures_1')
+var filtered_CHIRPS = CHIRPS.filter(ee.Filter.date(startDate, endDate));
+print(filtered_CHIRPS)
+var CHIRPS_GSD = filtered_CHIRPS.first().projection().nominalScale()
+
+function add_median_on_ROI_as_property(image)
+{
+  // ispirazione: https://developers.google.com/earth-engine/guides/debugging
+   var median = image.reduceRegion(
+    {reducer:  ee.Reducer.median(), geometry: geometry, scale: CHIRPS_GSD}).get('precipitation');
+  
+   return  image.set('median', median);
+}
+
+var filtered_CHIRPS_with_median =  filtered_CHIRPS.select(['precipitation']).map(add_median_on_ROI_as_property)
+
+print('filtered_CHIRPS_with_median',filtered_CHIRPS_with_median)
+var medianList_y = ee.Array(filtered_CHIRPS_with_median.aggregate_array('median'));
+var time_start_x = ee.Array(filtered_CHIRPS_with_median.aggregate_array('system:time_start'));
+
+print('medianList_y',medianList_y)
+
+function normalize_array (array)
+{
+  var min_y = medianList_y.reduce(ee.Reducer.min(), [0]).get([0])
+var max_y = medianList_y.reduce(ee.Reducer.max(), [0]).get([0])
+var count_y = medianList_y.reduce(ee.Reducer.count(), [0]).get([0])
+
+//x normalized = (x – x minimum) / (x maximum – x minimum)
+var normalized_array = medianList_y.subtract(min_y).divide(max_y.subtract(min_y))
+  return normalized_array
+}
+var min_y = medianList_y.reduce(ee.Reducer.min(), [0]).get([0])
+var max_y = medianList_y.reduce(ee.Reducer.max(), [0]).get([0])
+print('min_y',min_y)
+print('max_y', max_y)
+
+var medianList_y_normalized = normalize_array(medianList_y_normalized)
+//print('min_y', ee.Array(ee.List.repeat(min_y, count_y)))
+print('medianList_y_normalized', medianList_y_normalized)
+
+// Define the chart and print it to the console.
+var chart_original = ui.Chart.array.values({array: medianList_y, axis: 0, xLabels: time_start_x}).setOptions({
+  title: 'Precipitation  [mm/pentad]',
+  colors: ['blue'],
+  hAxis: {
+    title: 'Timestart',
+    titleTextStyle: {italic: false, bold: true}
+  },
+  vAxis: {
+    title: 'Precipitation [mm/pentad]',
+    titleTextStyle: {italic: false, bold: true}
+  },
+  pointSize: 4,
+  dataOpacity: 0.4,
+  lineWidth: 1,
+  legend: {position: 'none'},
+});
+print(chart_original);
+
+
+// Define the chart and print it to the console.
+var chart_normalized = ui.Chart.array.values({array: medianList_y_normalized, axis: 0, xLabels: time_start_x}).setOptions({
+  title: 'Precipitation normalized between 0 and 1',
+  colors: ['blue'],
+  hAxis: {
+    title: 'Timestart',
+    titleTextStyle: {italic: false, bold: true}
+  },
+  vAxis: {
+    title: 'Normalized precipitation',
+    titleTextStyle: {italic: false, bold: true}
+  },
+  pointSize: 4,
+  dataOpacity: 0.4,
+  lineWidth: 1,
+  legend: {position: 'none'},
+});
+print(chart_normalized);
+
+
+
+
+function add_median_normalize_on_ROI_as_property(image)
+{
+  // ispirazione: https://developers.google.com/earth-engine/guides/debugging
+   var median = image.reduceRegion(
+    {reducer:  ee.Reducer.median(), geometry: geometry, scale: CHIRPS_GSD}).get('precipitation');
+  // medianList_y.subtract(min_y).divide(max_y.subtract(min_y))
+    
+    var normalized_median =  ee.Number(image.get('median')).subtract(min_y).divide(max_y.subtract(min_y))
+    // aggiugno 1 per non avere troppi grafici centrati sull'asse delle x
+    var normalized_median_band = ee.Image(normalized_median).add(1).rename(['normalized_median_precipitation_on_ROI']);
+   image = image.addBands(normalized_median_band)
+   return  image.set('median_normalized',normalized_median);
+}
+
+var filtered_CHIRPS_with_normalized_median =  filtered_CHIRPS_with_median.select(['precipitation']).map(add_median_normalize_on_ROI_as_property)
+
+print('filtered_CHIRPS_with_normalized_median',filtered_CHIRPS_with_normalized_median)
+
+var IC_ALL_bis = fittedHarmonic.select('RVI', 'fitted_RVI').merge(fittedHarmonic_Sentinel_2.select('NDVI', 'fitted_NDVI')).merge(filtered_CHIRPS_with_normalized_median.select('normalized_median_precipitation_on_ROI'));
+
+var chart_RVI_NDVI_precipitation =
+    ui.Chart.image.series({
+          imageCollection: IC_ALL_bis,
+          region: part1,
+          reducer: ee.Reducer.median(),
+          scale: 10,
+          xProperty: 'system:time_start', 
+        
+        })
+        .setOptions({
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI timeseries vigneti with precipitation in flood area',
+          hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
+          vAxis: {
+            title: 'RVI-NDVI-normalized precipitation in flood area',
+            titleTextStyle: {italic: false, bold: true}
+          },
+          lineWidth: 1,
+          colors: ['green', 'black','red' ,'red', 'blue'],
+          //curveType: ['function', 'function'],
+            type: "line",
+            pointSize: 4,
+            dataOpacity: 0.4,
+          interpolateNulls: true // mettere a false per vedere la serie bucata
+        });
+print (chart_RVI_NDVI_precipitation);
+var chart_RVI_NDVI_precipitation_1 =
+    ui.Chart.image.series({
+          imageCollection: IC_ALL_bis,
+          region: part2,
+          reducer: ee.Reducer.median(),
+          scale: 10,
+          xProperty: 'system:time_start', 
+        
+        })
+        .setOptions({
+          title: 'Ascending RVI orbit' +numero_orbita+ '- NDVI timeseries vigneti with precipitation',
+          hAxis: {title: 'Date', titleTextStyle: {italic: false, bold: true}},
+          vAxis: {
+            title: 'RVI-NDVI-normalized precipitation',
+            titleTextStyle: {italic: false, bold: true}
+          },
+          lineWidth: 1,
+          colors: ['green', 'black','red' ,'red', 'blue'],
+          //curveType: ['function', 'function'],
+            type: "line",
+            pointSize: 4,
+            dataOpacity: 0.4,
+          interpolateNulls: true // mettere a false per vedere la serie bucata
+        });
+print (chart_RVI_NDVI_precipitation_1)
+  
+ 
+    
+    
